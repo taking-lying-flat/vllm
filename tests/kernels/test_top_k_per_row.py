@@ -804,6 +804,29 @@ def test_deepseek_topk_backends_no_error_and_reference(
 
 
 @pytest.mark.skipif(not _has_device_capability(90), reason="This test requires SM90+")
+@pytest.mark.parametrize("top_k", [512, 1024, 2048])
+@torch.inference_mode()
+def test_cooperative_topk_sanitizes_invalid_lengths(top_k: int) -> None:
+    """Treat negative lengths as empty and cap lengths to the row stride."""
+    torch.set_default_device("cuda:0")
+
+    lengths = torch.tensor(
+        [-1, 0, 1, top_k, top_k + 1], dtype=torch.int32, device="cuda"
+    )
+    logits = torch.empty((lengths.numel(), top_k), dtype=torch.float32, device="cuda")
+    indices = torch.empty((lengths.numel(), top_k), dtype=torch.int32, device="cuda")
+    workspace = torch.empty(RADIX_TOPK_WORKSPACE_SIZE, dtype=torch.uint8, device="cuda")
+
+    torch.ops._C.cooperative_topk(logits, lengths, indices, workspace, top_k, top_k)
+    torch.accelerator.synchronize()
+
+    expected = torch.full_like(indices, -1)
+    expected[2, 0] = 0
+    expected[3:] = torch.arange(top_k, dtype=torch.int32, device="cuda")
+    torch.testing.assert_close(indices, expected, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not _has_device_capability(90), reason="This test requires SM90+")
 @torch.inference_mode()
 def test_cooperative_topk_512_tie_workspace_is_per_row() -> None:
     """Regression test for TopK=512 tie workspace row overlap."""

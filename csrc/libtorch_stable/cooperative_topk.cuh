@@ -484,22 +484,24 @@ __device__ void large_topk(const float* __restrict__ row_input,
 template <uint32_t TopK, uint32_t CS>
 __device__ void cooperative_topk_body(CooperativeTopKParams<TopK> params) {
   const auto rank = blockIdx.y, row = blockIdx.x, tx = threadIdx.x;
-  const auto sl = params.lengths[row];
+  const int32_t raw_sl = params.lengths[row];
+  const uint32_t sl =
+      raw_sl <= 0 ? 0u : min(static_cast<uint32_t>(raw_sl), params.stride);
   int32_t* out = params.output + row * TopK;
   const float* in = params.input + row * params.stride;
 
   // Trivial: seq_len <= TopK
-  if (sl <= static_cast<int32_t>(TopK)) {
+  if (sl <= TopK) {
     if (rank == 0) {
       for (uint32_t i = tx; i < TopK; i += hist4096::kBlockSize) {
-        out[i] = (i < static_cast<uint32_t>(sl)) ? static_cast<int32_t>(i) : -1;
+        out[i] = i < sl ? static_cast<int32_t>(i) : -1;
       }
     }
     return;
   }
 
   // Short-Medium path: histogram_4096_topk on rank 0 only - all data fits in RF
-  if (sl <= static_cast<int32_t>(hist4096::kHist4096MaxLen)) {
+  if (sl <= hist4096::kHist4096MaxLen) {
     if (rank == 0) {
       extern __shared__ uint8_t sr[];
       hist4096::histogram_4096_topk<TopK, 12>(
